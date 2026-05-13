@@ -1,8 +1,10 @@
-module github.com/adakailabs/traceroute
+module github.com/alexkolakovprime/traceroute
 
-go 1.16
+go 1.26.2
 
 require (
-	github.com/sirupsen/logrus v1.8.1
-	golang.org/x/net v0.0.0-20210726213435-c6fcb2dbf985
+	github.com/sirupsen/logrus v1.9.4
+	golang.org/x/net v0.52.0
 )
+
+require golang.org/x/sys v0.44.0 // indirect

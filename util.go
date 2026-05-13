@@ -17,7 +17,7 @@ func GetLocalIP() (net.IP, error) {
 			return ipnet.IP, nil
 		}
 	}
-	return nil, errors.New("You do not appear to be connected to the Internet")
+	return nil, errors.New("you do not appear to be connected to the Internet")
 }
 
 // TODO: change to AddrToSockaddr

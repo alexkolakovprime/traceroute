@@ -51,6 +51,25 @@ func tracerouteProbe(opts *TracerouteOptions, ttl int, timeout *syscall.Timeval)
 
 	var currIP net.IP
 
+	// Hoist epoll setup and receive buffers out of the spin loop:
+	//   - defer-in-loop accumulates fd closes until function return
+	//   - per-iteration make([]byte) churns the allocator under concurrency
+	// golang creates all sockets as nonblocking. Although we *should* be able
+	// to use syscall.SetNonblock(sendSocket, false) -- it doesn't seem to work
+	// for some reason (presumably due to the magic that makes it nonblocking)
+	// instead of spinning for days-- we can epoll on it (for some reason select
+	// isn't working, presumably it doesn't have the correct magic).
+	epollfd, err := syscall.EpollCreate(1)
+	if err != nil {
+		return ProbeResponse{Success: false, Error: err, TTL: ttl}
+	}
+	defer syscall.Close(epollfd)
+	epollevent := syscall.EpollEvent{}
+	_ = syscall.EpollCtl(epollfd, syscall.EPOLL_CTL_ADD, sendSocket, &epollevent)
+	events := []syscall.EpollEvent{epollevent}
+	p := make([]byte, 1500)   // TODO: configurable recv size?
+	oob := make([]byte, 1500) // TODO: configurable recv size?
+
 	// attempt to get errors?
 	end := time.Now().Add(time.Second)
 	// TODO: goroutine? something cancellable
@@ -60,19 +79,8 @@ func tracerouteProbe(opts *TracerouteOptions, ttl int, timeout *syscall.Timeval)
 			break
 		}
 
-		// golang creates all sockets as nonblocking. Although we *should* be able
-		// to use syscall.SetNonblock(sendSocket, false) -- it doesn't seem to work
-		// for some reason (presumably due to the magic that makes it nonblocking)
-		// instead of spinning for days-- we can epoll on it (for some reason select
-		// isn't working, presumably it doesn't have the correct magic).
-		epollfd, err := syscall.EpollCreate(1)
-		defer syscall.Close(epollfd)
-		epollevent := syscall.EpollEvent{}
-		err = syscall.EpollCtl(epollfd, syscall.EPOLL_CTL_ADD, sendSocket, &epollevent)
-		syscall.EpollWait(epollfd, []syscall.EpollEvent{epollevent}, int(end.Sub(now).Nanoseconds() / int64(time.Millisecond)))
+		syscall.EpollWait(epollfd, events, int(end.Sub(now).Nanoseconds()/int64(time.Millisecond)))
 
-		var p = make([]byte, 1500)   // TODO: configurable recv size?
-		var oob = make([]byte, 1500) // TODO: configurable recv size?
 		_, oobn, _, _, err := syscall.Recvmsg(sendSocket, p, oob, syscall.MSG_ERRQUEUE)
 		if err != nil || oobn <= 0 {
 			continue
@@ -126,7 +134,7 @@ func tracerouteProbe(opts *TracerouteOptions, ttl int, timeout *syscall.Timeval)
 	}
 }
 
-// Main traceroute method, we take in a set of options, and do a traceroute
+// Traceroute Main traceroute method, we take in a set of options, and do a traceroute
 func Traceroute(opts *TracerouteOptions) (TracerouteResult, error) {
 	logrus.Debugf("doing a traceroute: %v", opts)
 
@@ -168,13 +176,13 @@ func Traceroute(opts *TracerouteOptions) (TracerouteResult, error) {
 
 		// If we hit our max TTL, then we are also done
 		if ttl >= opts.MaxTTL {
-			return result, fmt.Errorf("Hit max TTL before getting to destination")
+			return result, fmt.Errorf("hit max TTL before getting to destination")
 		}
 
 		// We finished this TTL, lets increment and then do our sleep
 		ttl++
 
-		// sleep between hops however much we where asked to
+		// sleep between hops however much we were asked to
 		time.Sleep(opts.ProbeWait)
 
 	}
